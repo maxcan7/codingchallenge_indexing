@@ -1,18 +1,24 @@
 #! /usr/bin/env python
+# For reading data directory
+import os, sys
+# For setting up pyspark
+from pyspark import SparkConf, SparkContext
 
+# Set main path
+mainpath = sys.argv[1]
+os.chdir(mainpath)
 
-# Set up spark context and s3 bucket and folder config
+# Set up spark context
 def s3_to_pyspark(config):
     conf = SparkConf()
-    conf.setMaster(config["publicDNS"])
-    conf.setAppName("topicMakr")
+    conf.setMaster("local")
+    conf.setAppName("indexing")
     sc = SparkContext(conf=conf)
     sqlContext = SQLContext(sc)
 
-    # Stopword list from nltk corpus
-    StopWords = set(stopwords.words("english"))
+    # Read text data
+    for filename in os.listdir(os.getcwd()):
 
-    # Read text data from S3 Bucket
     tokens = []
     titles = []
     i = 0
