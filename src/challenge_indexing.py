@@ -16,6 +16,7 @@ from pyspark.ml.feature import CountVectorizer
 from pyspark.ml.feature import IDF
 # For combining counts across books
 from pyspark.sql.functions import explode
+from pyspark.sql.functions import when
 
 
 # Set main path
@@ -51,8 +52,9 @@ def indexing_fun(**kwargs):
     book = cvmodel.transform(book)
     # Combine book with corpus
     if 'corpus' in locals():
+        book = book.withColumn("index", when(book["index"] == 0, doc))
         book = book.union(corpus)
-        book = book.select("raw_features", explode("list_of_words").alias("list_of_words")).groupBy("raw_features", "list_of_words")
+        docCounts = book.select("index", explode("list_of_words").alias("words")).groupBy("index", "words").count()
         # Return book as corpus
         return book
     else:
@@ -110,6 +112,6 @@ if __name__ == '__main__':
         if idx == 0:
             corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext)
         else:
-            corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext, corpus=corpus)
+            corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext, corpus=corpus, doc=filename)
         idx = 1
     corpus = tfidf_fun(corpus)
