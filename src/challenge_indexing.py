@@ -14,6 +14,9 @@ from nltk.corpus import stopwords
 # For TF-IDF
 from pyspark.ml.feature import CountVectorizer
 from pyspark.ml.feature import IDF
+# For combining counts across books
+from pyspark.sql.functions import explode
+
 
 # Set main path
 mainpath = sys.argv[1]
@@ -33,9 +36,9 @@ def context(config):
     return sc, sqlContext
 
 
-# Indexing function which tokenizes and computes tf-idf
-def indexing_fun(file, sc, sqlContext):
-    # Load ineach book and make each line a document
+# Indexing function which tokenizes terms and computes TF
+def indexing_fun(**kwargs):
+    # Load in each book and make each line a document
     book = sc.wholeTextFiles(file).map(lambda x: x[1])
     # Run the preprocess function on the book and zip
     book = book.mapPartitions(preproc).zipWithIndex()
@@ -46,32 +49,25 @@ def indexing_fun(file, sc, sqlContext):
                          outputCol="raw_features")
     cvmodel = cv.fit(book)
     book = cvmodel.transform(book)
-    # Return variables for subsequent functions
-    return sqlContext, book
+    # Combine book with corpus
+    if 'corpus' in locals():
+        book = book.union(corpus)
+        book = book.select("raw_features", explode("list_of_words").alias("list_of_words")).groupBy("raw_features", "list_of_words")
+        # Return book as corpus
+        return book
+    else:
+        # Return book as corpus
+        return book
 
 
-# Convert tokens to TF-IDF and run LDA model
-def books_to_lda(ldaparam, sqlContext, tokens, titles):
-    # Transform term tokens RDD to dataframe
-    df_txts = sqlContext.createDataFrame(tokens, ["list_of_words", "index"])
-    # Replace index to monotonically increasing set of values
-    # (given zipWithIndex on tokens occurs over loop
-    # and therefore is all zeros)
-    df_txts = df_txts.withColumn('index', monotonically_increasing_id())
-    # TF
-    cv = CountVectorizer(inputCol="list_of_words",
-                         outputCol="raw_features")
-    cvmodel = cv.fit(df_txts)
-    result_cv = cvmodel.transform(df_txts)
-
-    # Create vocab list
-    vocab = cvmodel.vocabulary
-
+# Calculate IDF and TF-IDF from full corpus
+def tfidf_fun(corpus):
     # IDF
     idf = IDF(inputCol="raw_features",
               outputCol="features")
-    idfModel = idf.fit(result_cv)
-    result_tfidf = idfModel.transform(result_cv)
+    idfModel = idf.fit(corpus)
+    corpus = idfModel.transform(corpus)
+    return corpus
 
 
 # Iterator function for processing partitioned data
@@ -108,7 +104,12 @@ config = {
 # Run pipeline functions
 if __name__ == '__main__':
     [sc, sqlContext] = context(config)
+    idx = 0
     for filename in os.listdir(os.getcwd()):
         file = mainpath + filename
-        indexing_fun(file, sc, sqlContext)
-
+        if idx == 0:
+            corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext)
+        else:
+            corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext, corpus=corpus)
+        idx = 1
+    corpus = tfidf_fun(corpus)
