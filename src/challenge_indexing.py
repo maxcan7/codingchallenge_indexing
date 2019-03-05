@@ -11,6 +11,9 @@ from pyspark.sql import SQLContext
 import re as re
 # For importing stopwords
 from nltk.corpus import stopwords
+# For TF-IDF
+from pyspark.ml.feature import CountVectorizer
+from pyspark.ml.feature import IDF
 
 # Set main path
 mainpath = sys.argv[1]
@@ -18,6 +21,7 @@ os.chdir(mainpath)
 
 # Stopword list from nltk corpus
 StopWords = set(stopwords.words("english"))
+
 
 # Set up spark context
 def context(config):
@@ -31,12 +35,19 @@ def context(config):
 
 # Indexing function which tokenizes and computes tf-idf
 def indexing_fun(file, sc, sqlContext):
-    # Load in all books and make each line a document
+    # Load ineach book and make each line a document
     book = sc.wholeTextFiles(file).map(lambda x: x[1])
-    # Run the preprocess function across books and zip
-    tokens = book.mapPartitions(preproc).zipWithIndex()
+    # Run the preprocess function on the book and zip
+    book = book.mapPartitions(preproc).zipWithIndex()
+    # Transform term tokens RDD to dataframe
+    book = sqlContext.createDataFrame(book, ["list_of_words", "index"])
+    # Calculate TF as raw count of terms
+    cv = CountVectorizer(inputCol="list_of_words",
+                         outputCol="raw_features")
+    cvmodel = cv.fit(book)
+    book = cvmodel.transform(book)
     # Return variables for subsequent functions
-    return sqlContext, tokens
+    return sqlContext, book
 
 
 # Convert tokens to TF-IDF and run LDA model
@@ -90,7 +101,7 @@ def preproc(iterator):
 # Set configurations
 config = {
     # Your Public DNS or local
-    "setMaster": "local",
+    "setMaster": "local"
 }
 
 
@@ -98,6 +109,6 @@ config = {
 if __name__ == '__main__':
     [sc, sqlContext] = context(config)
     for filename in os.listdir(os.getcwd()):
-        file = os.getcwd() + '\\' + filename
+        file = mainpath + filename
         indexing_fun(file, sc, sqlContext)
 
