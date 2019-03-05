@@ -1,50 +1,42 @@
 #! /usr/bin/env python
+
+
 # For reading data directory
-import os, sys
+import os
+import sys
 # For setting up pyspark
 from pyspark import SparkConf, SparkContext
+from pyspark.sql import SQLContext
+# For processing dataframes
+import re as re
+# For importing stopwords
+from nltk.corpus import stopwords
 
 # Set main path
 mainpath = sys.argv[1]
 os.chdir(mainpath)
 
+# Stopword list from nltk corpus
+StopWords = set(stopwords.words("english"))
+
 # Set up spark context
-def s3_to_pyspark(config):
+def context(config):
     conf = SparkConf()
-    conf.setMaster("local")
+    conf.setMaster(config["setMaster"])
     conf.setAppName("indexing")
     sc = SparkContext(conf=conf)
     sqlContext = SQLContext(sc)
+    return sc, sqlContext
 
-    # Read text data
-    for filename in os.listdir(os.getcwd()):
 
-    tokens = []
-    titles = []
-    i = 0
-
-    # Loop through all books in folder in bucket
-    for file in filelist:
-        # Load in all books and make each line a document
-        books = sc.wholeTextFiles(file).map(lambda x: x[1])
-        # Turn text to string for titles
-        titles.append(books.collect()[0].encode('utf-8'))
-        # Find 'Title:' in raw text
-        start = titles[i].find('Title:')+7
-        # Find the line break after the title
-        end = titles[i][start:len(titles[i])].find('\r')
-        end = start+end
-        # Index title
-        titles[i] = titles[i][start:end]
-        # Run the preprocess function across books and zip
-        tokens.append(books.mapPartitions(preproc).zipWithIndex())
-        i += 1
-
-    # Combine tokens
-    tokens = sc.union(tokens)
-
+# Indexing function which tokenizes and computes tf-idf
+def indexing_fun(file, sc, sqlContext):
+    # Load in all books and make each line a document
+    book = sc.wholeTextFiles(file).map(lambda x: x[1])
+    # Run the preprocess function across books and zip
+    tokens = book.mapPartitions(preproc).zipWithIndex()
     # Return variables for subsequent functions
-    return sqlContext, tokens, titles
+    return sqlContext, tokens
 
 
 # Convert tokens to TF-IDF and run LDA model
@@ -94,8 +86,18 @@ def preproc(iterator):
         y = nostops(y)
         yield y
 
+
 # Set configurations
+config = {
+    # Your Public DNS or local
+    "setMaster": "local",
+}
+
 
 # Run pipeline functions
 if __name__ == '__main__':
-    
+    [sc, sqlContext] = context(config)
+    for filename in os.listdir(os.getcwd()):
+        file = os.getcwd() + '\\' + filename
+        indexing_fun(file, sc, sqlContext)
+
