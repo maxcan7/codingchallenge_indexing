@@ -14,14 +14,15 @@ from nltk.corpus import stopwords
 # For TF-IDF
 from pyspark.ml.feature import CountVectorizer
 from pyspark.ml.feature import IDF
-# For combining counts across books
+# For retrieving counts from count vectors
 from pyspark.sql.functions import explode
 from pyspark.sql.functions import when
-
+from pyspark.sql.functions import lit
 
 # Set main path
 mainpath = sys.argv[1]
-os.chdir(mainpath)
+datapath = mainpath+'data/'
+os.chdir(datapath)
 
 # Stopword list from nltk corpus
 StopWords = set(stopwords.words("english"))
@@ -50,26 +51,42 @@ def indexing_fun(**kwargs):
                          outputCol="raw_features")
     cvmodel = cv.fit(book)
     book = cvmodel.transform(book)
-    # Combine book with corpus
-    if 'corpus' in locals():
-        book = book.withColumn("index", when(book["index"] == 0, doc))
-        book = book.union(corpus)
-        docCounts = book.select("index", explode("list_of_words").alias("words")).groupBy("index", "words").count()
-        # Return book as corpus
-        return book
-    else:
-        # Return book as corpus
-        return book
+    book = book.withColumn("index", when(book["index"] == 0, doc))
+    docCounts = book.select("index", explode("list_of_words").alias("words")).groupBy("index", "words").count()
+    # Write outputs
+    book.select('list_of_words', 'index', 'raw_features').write.save('countvec_'+doc+'.parquet')
+    docCounts.select('index', 'words', 'count').write.save('termdoccounts_'+doc+'.parquet')
 
 
 # Calculate IDF and TF-IDF from full corpus
-def tfidf_fun(corpus):
+def tfidf_fun():
+    # Load each file and do a running count of all terms for calculating TFIDF
+    totCounts = []
+    for filename in os.listdir(os.getcwd()):
+        file = datapath + filename
+        docCounts = spark.read.load(mainpath+'termdoccounts_'+filename+'.parquet')
+        if not totCounts:
+            # Add a column for words where each row is a unique word
+            totCounts = docCounts.select('words')
+            # Add a column for running count of number of documents each word appears in
+            totCounts = totCounts.withColumn('docCount', lit(1))
+        else:
+            # Find words present in totCounts and current book and update count
+            updatewords = totCounts.select('words').intersect(docCounts.select('words'))
+            tmp = totCounts.withColumn('docCount', when(totCounts.words.alias('old') == updatewords.words.alias('new'), totCounts.docCount + 1).otherwise(totCounts.docCount))
+            tmp2 = totCounts.select('words', (totCounts.words.alias('old') == updatewords.words.alias('new')).alias('update'))
+            # Subtract from docCounts words already present in totCounts
+            newwords = docCounts.select('words').subtract(totCounts.select('words')).withColumn('docCount', lit(1))
+            # Add new words to totCounts
+            totCounts = totCounts.unionAll(newwords)
+
+
+
     # IDF
     idf = IDF(inputCol="raw_features",
               outputCol="features")
-    idfModel = idf.fit(corpus)
-    corpus = idfModel.transform(corpus)
-    return corpus
+    idfModel = idf.fit(book)
+    tfidf_vecs = idfModel.transform(book)
 
 
 # Iterator function for processing partitioned data
@@ -106,12 +123,7 @@ config = {
 # Run pipeline functions
 if __name__ == '__main__':
     [sc, sqlContext] = context(config)
-    idx = 0
     for filename in os.listdir(os.getcwd()):
-        file = mainpath + filename
-        if idx == 0:
-            corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext)
-        else:
-            corpus = indexing_fun(file=file, sc=sc, sqlContext=sqlContext, corpus=corpus, doc=filename)
-        idx = 1
-    corpus = tfidf_fun(corpus)
+        file = datapath + filename
+        indexing_fun(file=file, sc=sc, sqlContext=sqlContext, doc=filename)
+    tfidx_vecs = tfidf_fun()
