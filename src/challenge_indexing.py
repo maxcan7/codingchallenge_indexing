@@ -18,6 +18,7 @@ from pyspark.ml.feature import IDF
 from pyspark.sql.functions import explode
 from pyspark.sql.functions import when
 from pyspark.sql.functions import lit
+from pyspark.sql.functions import monotonically_increasing_id
 
 # Set main path
 mainpath = sys.argv[1]
@@ -60,7 +61,12 @@ def indexing_fun(**kwargs):
     # Get sum of all words
     N = TF.groupBy().sum().collect()[0][0]
     # take square root of term count / total number of terms for TF
-    TF = TF.withColumn("TF", TF.select("count").rdd.map(lambda count: [(x/N)**(1/2.0) for x in count]))
+    termfreq = TF.select("count").rdd.map(lambda count: [(x/N)**(1/2.0) for x in count]).toDF()
+    termfreq = termfreq.withColumnRenamed("_1", "TF")
+    # Obnoxious hoops to add term frequency ("TF") to TF dataframe
+    TF = TF.withColumn("id", monotonically_increasing_id())
+    termfreq = termfreq.withColumn("id", monotonically_increasing_id())
+    TF = TF.join(termfreq, "id", "outer").drop("id")
     # Write outputs
     book.select('list_of_words', 'index', 'raw_features').write.save('countvec_'+doc+'.parquet')
     TF.select('index', 'words', 'count', 'TF').write.save('TF_'+doc+'.parquet')
